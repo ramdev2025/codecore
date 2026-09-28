@@ -1,6 +1,6 @@
 # Deploying Jupiter
 
-Target: **https://jupiter.ramdevcalope.com**, running on Fly.io in Singapore, with
+Target: **https://jupiter.workmov.com**, running on Fly.io in Singapore, with
 DNS on Cloudflare.
 
 ## Why this shape
@@ -31,7 +31,7 @@ fly auth signup      # or: fly auth login
 `fly launch` generate a new config.
 
 ```powershell
-fly apps create jupiter-ramdev
+fly apps create jupiter-workmov
 ```
 
 Secrets come from your local `.env` — never commit them. Set all four in one
@@ -66,17 +66,17 @@ fly logs
 Check it came up:
 
 ```powershell
-curl https://jupiter-ramdev.fly.dev/api/healthz
+curl https://jupiter-workmov.fly.dev/api/healthz
 # {"status":"ok","version":"...","lock_ttl_seconds":300}
 ```
 
-## 3. Point ramdevcalope.com at it
+## 3. Point workmov.com at it
 
-In **Cloudflare → DNS** for `ramdevcalope.com`, add:
+In **Cloudflare → DNS** for `workmov.com`, add:
 
 | Type | Name | Target | Proxy |
 |---|---|---|---|
-| CNAME | `jupiter` | `jupiter-ramdev.fly.dev` | **DNS only (grey)** |
+| CNAME | `jupiter` | `jupiter-workmov.fly.dev` | **DNS only (grey)** |
 
 Grey cloud, not orange — at least to start. Proxying breaks Fly's HTTP-01 ACME
 challenge, so the certificate never issues, and Cloudflare's proxy can buffer
@@ -86,11 +86,11 @@ depends on. Grey cloud avoids both problems and Fly still serves valid TLS.
 Then issue the certificate:
 
 ```powershell
-fly certs add jupiter.ramdevcalope.com
-fly certs show jupiter.ramdevcalope.com     # wait for "Ready"
+fly certs add jupiter.workmov.com
+fly certs show jupiter.workmov.com     # wait for "Ready"
 ```
 
-Usually under a minute. Then https://jupiter.ramdevcalope.com is live.
+Usually under a minute. Then https://jupiter.workmov.com is live.
 
 ### Turning the proxy on later (optional)
 
@@ -99,6 +99,14 @@ to orange **after** the certificate is `Ready`, and set **SSL/TLS → Overview �
 Full (strict)**. Not Flexible — Flexible causes a redirect loop. Then reload the
 dashboard and confirm the activity feed still streams; if events arrive in bursts
 instead of live, Cloudflare is buffering the SSE and you should go back to grey.
+
+One caution specific to this zone: `workmov.com` already serves a proxied site at
+its apex, and **Cloudflare's SSL/TLS mode is zone-wide, not per-record**. Changing
+it to Full (strict) for Jupiter also changes it for that existing site, which will
+break it if its origin does not present a valid certificate. Check what the apex
+origin is before touching the mode. Staying on grey cloud avoids the question
+entirely — unproxied records bypass Cloudflare, so the zone mode never applies to
+them.
 
 ## 4. Deploy on push (optional)
 
@@ -125,7 +133,7 @@ From the dashboard's setup wizard, or directly:
 
 ```bash
 claude mcp add --transport http jupiter --scope user \
-  https://jupiter.ramdevcalope.com/api/mcp \
+  https://jupiter.workmov.com/api/mcp \
   --header "Authorization: Bearer jpm_..."
 ```
 

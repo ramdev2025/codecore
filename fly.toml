@@ -2,8 +2,8 @@
 #
 # `app` must be globally unique across all of Fly — "jupiter" is long taken.
 # This only sets the internal *.fly.dev hostname; the public address is
-# jupiter.ramdevcalope.com, set up via `fly certs add` (see DEPLOY.md).
-app = 'jupiter-ramdev'
+# jupiter.workmov.com, set up via `fly certs add` (see DEPLOY.md).
+app = 'jupiter-workmov'
 
 # Singapore. The Neon database is in ap-southeast-1, and every request here
 # makes several round trips to it, so co-locating is the single biggest
