@@ -72,71 +72,41 @@ curl https://jupiter-workmov.fly.dev/api/healthz
 
 ## 3. Point workmov.com at it
 
-Deploy and verify on `jupiter-workmov.fly.dev` first. It already serves valid TLS
-and involves Cloudflare not at all, so separating the two steps means a DNS
-problem can never look like an app problem.
+In **Cloudflare → DNS** for `workmov.com`, add:
 
-Two routes, depending on whether the record's proxy toggle will move.
+| Type | Name | Target | Proxy |
+|---|---|---|---|
+| CNAME | `jupiter` | `jupiter-workmov.fly.dev` | **DNS only (grey)** |
 
-### Route A — proxy stays on (orange cloud)
+Grey cloud, not orange — at least to start. Proxying breaks Fly's HTTP-01 ACME
+challenge, so the certificate never issues, and Cloudflare's proxy can buffer
+Server-Sent Events, which is exactly what the dashboard's live activity feed
+depends on. Grey cloud avoids both problems and Fly still serves valid TLS.
 
-This works and needs no proxy toggle at all. Certificate validation moves onto
-records Cloudflare *cannot* proxy, so the orange cloud on the traffic record stops
-mattering.
+Then issue the certificate:
 
-1. Add the traffic record in **Cloudflare → DNS**:
+```powershell
+fly certs add jupiter.workmov.com
+fly certs show jupiter.workmov.com     # wait for "Ready"
+```
 
-   | Type | Name | Target | Proxy |
-   |---|---|---|---|
-   | CNAME | `jupiter` | `jupiter-workmov.fly.dev` | Proxied (orange) — fine |
+Usually under a minute. Then https://jupiter.workmov.com is live.
 
-2. Ask Fly which validation records it wants:
+### Turning the proxy on later (optional)
 
-   ```powershell
-   fly certs add jupiter.workmov.com
-   fly certs setup jupiter.workmov.com
-   ```
+If you want Cloudflare's DDoS protection and origin-IP hiding, switch the record
+to orange **after** the certificate is `Ready`, and set **SSL/TLS → Overview →
+Full (strict)**. Not Flexible — Flexible causes a redirect loop. Then reload the
+dashboard and confirm the activity feed still streams; if events arrive in bursts
+instead of live, Cloudflare is buffering the SSE and you should go back to grey.
 
-3. Add what it prints. There are two, and neither is proxyable:
-
-   - a **`_fly-ownership` TXT** record — TXT records can never be proxied, so this
-     one works regardless of any toggle
-   - a **`_acme-challenge.jupiter` CNAME** pointing at Fly's target, which drives
-     DNS-01 validation instead of the HTTP-01 challenge the proxy blocks
-
-   Cloudflare's own guidance is that ownership-proving CNAMEs should not be
-   proxied, so leave that one DNS-only if it offers the choice.
-
-4. Set **SSL/TLS → Overview → Full (strict)**. Not Flexible — Flexible causes a
-   redirect loop.
-
-   **Check one thing before you do.** The mode is **zone-wide, not per-record**,
-   and `workmov.com` already serves a proxied site at its apex. Switching the zone
-   to Full (strict) also switches it for that site, and will break it if its origin
-   does not present a valid certificate. Find out what the apex is first.
-
-5. Wait for the certificate, then test the live feed:
-
-   ```powershell
-   fly certs show jupiter.workmov.com     # wait for "Ready"
-   ```
-
-   Open the dashboard and watch the activity feed. Cloudflare's proxy can buffer
-   Server-Sent Events; if events arrive in bursts rather than continuously, that is
-   what is happening, and Route B is the fix. WebSockets are supported on every
-   Cloudflare plan, so the advisor panel is not at risk either way.
-
-### Route B — DNS only (grey cloud)
-
-Simpler where available: one CNAME with the proxy off, then `fly certs add`. No
-ownership records, no zone-wide SSL change, no SSE buffering risk, and Fly serves
-its own valid TLS.
-
-If the toggle will not move, the record is usually managed by another Cloudflare
-product — a Tunnel public hostname, a Workers custom domain, or a Pages project
-each pin their record to proxied and grey the switch out. A record you add
-yourself under a fresh subdomain is not subject to that, so add `jupiter` as a new
-record rather than editing an existing one.
+One caution specific to this zone: `workmov.com` already serves a proxied site at
+its apex, and **Cloudflare's SSL/TLS mode is zone-wide, not per-record**. Changing
+it to Full (strict) for Jupiter also changes it for that existing site, which will
+break it if its origin does not present a valid certificate. Check what the apex
+origin is before touching the mode. Staying on grey cloud avoids the question
+entirely — unproxied records bypass Cloudflare, so the zone mode never applies to
+them.
 
 ## 4. Deploy on push (optional)
 
