@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme variables ──────────────────────────────────────────── */
+:root, [data-theme="light"] {
+  --ui-bg-base: #f8fafc;
+  --ui-bg-surface: #ffffff;
+  --ui-bg-elevated: #ffffff;
+  --ui-bg-hover: #f1f5f9;
+  --ui-bg-selected: #eff6ff;
+  --ui-border: #e2e8f0;
+  --ui-border-strong: #cbd5e1;
+  --ui-text-primary: #0f172a;
+  --ui-text-secondary: #64748b;
+  --ui-text-muted: #94a3b8;
+  --ui-text-on-accent: #ffffff;
+  --ui-accent: #2563eb;
+  --ui-accent-hover: #1d4ed8;
+  --ui-accent-muted: #eff6ff;
+  --ui-success: #10b981; --ui-success-bg: #f0fdf4;
+  --ui-warning: #f59e0b; --ui-warning-bg: #fffbeb;
+  --ui-error: #ef4444;   --ui-error-bg: #fef2f2;
+  --ui-info: #3b82f6;    --ui-info-bg: #eff6ff;
+  --ui-chart-1: #2563eb; --ui-chart-2: #10b981; --ui-chart-3: #f59e0b;
+  --ui-chart-4: #ef4444; --ui-chart-5: #8b5cf6; --ui-chart-6: #06b6d4;
+  --ui-chart-grid: #e2e8f0;
+  --ui-chart-label: #94a3b8;
+}
+
+[data-theme="dark"] {
+  --ui-bg-base: #0a0c10;
+  --ui-bg-surface: #12161e;
+  --ui-bg-elevated: #1a1f2b;
+  --ui-bg-hover: #1f2535;
+  --ui-bg-selected: #1a2540;
+  --ui-border: #1e2535;
+  --ui-border-strong: #2a3347;
+  --ui-text-primary: #eef2f7;
+  --ui-text-secondary: #8896ae;
+  --ui-text-muted: #4a5568;
+  --ui-text-on-accent: #ffffff;
+  --ui-accent: #4c8ef8;
+  --ui-accent-hover: #6aa0fa;
+  --ui-accent-muted: #1a2240;
+  --ui-success: #34d399; --ui-success-bg: #0a1f18;
+  --ui-warning: #fbbf24; --ui-warning-bg: #1c1000;
+  --ui-error: #f87171;   --ui-error-bg: #1f0808;
+  --ui-info: #4c8ef8;    --ui-info-bg: #0f1830;
+  --ui-chart-1: #4c8ef8; --ui-chart-2: #34d399; --ui-chart-3: #fbbf24;
+  --ui-chart-4: #f87171; --ui-chart-5: #a78bfa; --ui-chart-6: #22d3ee;
+  --ui-chart-grid: #1e2535;
+  --ui-chart-label: #4a5568;
+}
+
+/* ── Base styles ──────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background-color: var(--ui-bg-base);
+  color: var(--ui-text-primary);
+}
+
+#root { width: 100%; height: 100vh; overflow: hidden; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--ui-border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ui-text-muted); }
+
+/* ── Reduced motion ───────────────────────────────────────────────
+   Expiry meters animate their width as a claim ages. Anyone who has
+   asked the OS for less motion gets the value without the movement. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

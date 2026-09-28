@@ -1,0 +1,10 @@
+./agentflow-0.28.0-py3-none-any.whl[workflows]
+langchain-openai
+fastapi
+uvicorn[standard]
+websockets
+psycopg[binary,pool]>=3.2
+mcp==1.30.0
+httpx>=0.27
+python-dotenv>=1.0
+pytest>=8.0

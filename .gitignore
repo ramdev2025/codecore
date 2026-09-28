@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.env
+.weaver-app.log
+.weaver-app.pid
+node_modules/
+.agentflow/
+.pytest_cache/
+
+# Local run scratch — committed by accident once and it never stops.
+*.log
+t.err
+
+# Weaver's local build state. Machine-specific, not source.
+.weaver-state.json
+.publish-history.json

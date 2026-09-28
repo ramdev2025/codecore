@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.pytest_cache/
+.agentflow/
+node_modules/
+ui_source/node_modules/
+.git/
+.github/
+
+# Built by stage 1 — never ship the host's copy, it goes stale silently.
+static/
+
+# Local scratch from development runs.
+*.log
+t.err
+.weaver-app.log
+.weaver-app.pid
+.weaver-state.json
+.publish-history.json
+tests/
