@@ -149,13 +149,40 @@ Nothing sweeps on a timer. Expiry happens lazily, as two `UPDATE … WHERE` stat
 the same transaction as whatever read or write triggered them. A clause that matches nothing
 writes nothing.
 
+Expiry is an `UPDATE`, never a `DELETE`. A lapsed claim keeps its row and gains a `released_at`
+stamp, so the record of a conflict outlives the conflict.
+
+### History
+
+`/api/activity` answers "what is claimed **right now**", and every one of its reads filters
+`released_at IS NULL`. That is correct for a dashboard and useless for a log — a claim vanishes
+the moment it lapses, taking the evidence of any collision with it.
+
+`GET /api/history?limit=N` is the same rows without that filter, newest first, so the dashboard's
+**Log** page keeps showing a conflict after both claims behind it are gone. Each claim carries a
+`state`:
+
+| `state` | Meaning |
+|---|---|
+| `active` | Still held — `released_at` is null |
+| `expired` | The sweep closed it; it had gone a full TTL unrefreshed |
+| `released` | Closed sooner than the TTL — an explicit `jupiter_unlock_file`, or its session ended |
+
+`state` is **inferred, not stored**. The sweep and an explicit unlock do the same thing to a row
+— stamp `released_at` — so the only signal separating them is how long the claim had gone
+unrefreshed when it closed. Treat it as a label, not a fact of record. The one case it reads
+wrong: a claim whose session ended reports `released` however recently it was refreshed.
+
+The dashboard re-fetches history when the set of live claims changes rather than on a timer,
+since a claim entering or leaving `/api/activity` is exactly when history gains a row.
+
 ## API
 
 **Public** — `GET /api/healthz` · `POST /api/orgs` · `POST /api/orgs/{slug}/join`
 
 **Member or admin** — `GET /api/orgs/{slug}/members` · `GET /api/orgs/{slug}/activity` ·
-`GET /api/activity` · `GET /api/announcements?limit=N` · `GET /api/orgs/{slug}/stream` *(SSE)* ·
-`GET /api/semantic`
+`GET /api/activity` · `GET /api/history?limit=N` · `GET /api/announcements?limit=N` ·
+`GET /api/orgs/{slug}/stream` *(SSE)* · `GET /api/semantic`
 
 **Member only** — `POST /api/sessions` · `POST /api/sessions/{id}/heartbeat` ·
 `DELETE /api/sessions/{id}` · `POST /api/locks` · `POST /api/locks/release` ·
@@ -209,7 +236,12 @@ Jupiter on a public address.
 - **Joining is open.** Anyone who can reach the server and knows a team's slug can join it and get
   a member key. There is no invitation and no approval.
 - **No key rotation or revocation.** A leaked key is valid until the team is abandoned.
-- **No rate limiting and no audit log.**
+- **No rate limiting.**
+- **Claim history is not an audit log.** `/api/history` shows every claim ever taken, which is a
+  record of intent, not of access — nothing logs who *read* the dashboard, called a tool, or
+  fetched a snippet. The rows are ordinary mutable table rows, and `state` is inferred rather
+  than recorded. Any member can read the whole org's history, so it also widens what a leaked
+  key exposes: not just what is claimed now, but everything anyone has claimed.
 - **A blocked claim is still recorded**, so a block "lifts" when the other claim expires without
   anyone being told. That is the advisory design, not a defect.
 - **The SSE stream authenticates with a `?key=` query parameter**, because `EventSource` cannot
@@ -237,14 +269,15 @@ app.py            FastAPI: REST + SSE + MCP mount + static + agent WebSocket
 api/              route handlers — parse → auth → call jupiter_core → JSON
 jupiter_core/     all the logic, framework-free
   paths.py        path normalisation        expiry: time_util.py + sweep.py
-  auth.py         key minting and verification   locks_repo.py  the conflict rule
+  auth.py         key minting and verification   locks_repo.py  the conflict rule,
+                                                 and the history query beside it
   activity.py     the single batched query   semantic.py  analysis + validation
   render.py       the exact tool output strings
 mcp_app/          the MCP server (official mcp SDK, transport-level bearer auth)
 jupiter_admin/    bootstrap CLI
 ui_source/        dashboard source (Vite + React + Tailwind)
 static/           built dashboard
-tests/            95 unit tests — no database, no network
+tests/            150 unit tests — no database, no network
 ```
 
 `jupiter_core/` imports neither FastAPI, nor AgentFlow, nor the `mcp` SDK. All three front doors —
@@ -254,7 +287,7 @@ implementation of the coordination rules.
 ## Tests
 
 ```bash
-pytest tests/          # 130 tests, fully offline
+pytest tests/          # 150 tests, fully offline
 ```
 
 Covers path normalisation (separators, `.`/`..`, NFC, control characters, the length cap, and that
@@ -270,6 +303,12 @@ whole file, so it conflicts with everything on that path and renders byte-identi
 claims read before ranges existed. It also drives the overlap matrix (partial, touching,
 adjacent-but-disjoint, contained, identical), the validation rejections, and that snippets are
 dropped unless storage is explicitly enabled.
+
+The history suite covers the `expired`/`released` boundary in both directions, that the inference
+follows the configured TTL rather than the default, that a row with no `refreshed_at` is never
+called expired, and that `HistoryLockOut` and `LockOut` agree on every field they share — plus
+that the two queries select the same columns in the same order, since both feed one positional
+row mapper.
 
 Integration tests that need a real database are gated behind `JUPITER_TEST_DATABASE_URL` and skip
 when it is unset: the lazy-sweep SQL uses `interval`, `ON CONFLICT … WHERE` and a correlated

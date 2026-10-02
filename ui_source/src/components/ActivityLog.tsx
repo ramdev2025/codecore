@@ -1,5 +1,5 @@
 import {
-  AlertTriangle, CheckCircle2, Clock, Megaphone, Sparkles, TimerOff,
+  AlertTriangle, Archive, CheckCircle2, Clock, Megaphone, Sparkles, TimerOff,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
@@ -28,6 +28,7 @@ const SEVERITY: Record<LogSeverity, { label: string; icon: ReactNode; badge: 'er
   advisory:  { label: 'AI-suggested · advisory', icon: <Sparkles className="h-3 w-3" />, badge: 'purple', rail: 'bg-purple-400' },
   ok:        { label: 'clear',     icon: <CheckCircle2 className="h-3 w-3" />,  badge: 'success', rail: 'bg-emerald-500' },
   info:      { label: 'announcement', icon: <Megaphone className="h-3 w-3" />,  badge: 'neutral', rail: 'bg-ui-border-strong' },
+  closed:    { label: 'closed',    icon: <Archive className="h-3 w-3" />,       badge: 'neutral', rail: 'bg-ui-border-strong' },
 }
 
 export function ActivityLog({ entries, nowMs, limit, onInspect, emptyMessage = 'Nothing has happened yet.' }: Props) {
@@ -53,6 +54,11 @@ export function ActivityLog({ entries, nowMs, limit, onInspect, emptyMessage = '
                 <p className="min-w-0 break-words text-sm font-semibold text-ui-text">{entry.title}</p>
                 <div className="flex flex-shrink-0 items-center gap-2">
                   <StatusBadge label={meta.label} variant={meta.badge} icon={meta.icon} />
+                  {/* A past conflict keeps its red rail so it stays findable,
+                      which makes saying it is over non-optional. */}
+                  {entry.past && entry.severity === 'conflict' && (
+                    <StatusBadge label="ended" variant="neutral" />
+                  )}
                   <span className="whitespace-nowrap text-xs text-ui-text-2">{formatAgo(entry.atIso, nowMs)}</span>
                 </div>
               </div>

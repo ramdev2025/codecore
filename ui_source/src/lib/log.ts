@@ -1,4 +1,4 @@
-import type { ActivityOut, LockOut, SemanticOut } from '../api/client'
+import type { ActivityOut, HistoryLockOut, LockOut, SemanticOut } from '../api/client'
 import {
   conflictingHolders,
   formatClock,
@@ -6,11 +6,12 @@ import {
   formatRange,
   formatRemaining,
   intersectRange,
+  pastConflictingHolders,
   remediationSteps,
   secondsRemaining,
 } from './conflicts'
 
-export type LogSeverity = 'conflict' | 'advisory' | 'expiring' | 'expired' | 'ok' | 'info'
+export type LogSeverity = 'conflict' | 'advisory' | 'expiring' | 'expired' | 'ok' | 'info' | 'closed'
 
 export interface LogEntry {
   id: string
@@ -26,6 +27,8 @@ export interface LogEntry {
   todo: string[]
   /** True for anything the model suggested, so it never reads as a hard fact. */
   aiSuggested?: boolean
+  /** True for something that already finished — the claims behind it are gone. */
+  past?: boolean
   /** The claim this entry is about, when there is one — lets the row open the modal. */
   lock?: LockOut
 }
@@ -35,10 +38,12 @@ const EXPIRING_SOON_SECONDS = 60
 /**
  * Build the activity log from the state we actually have.
  *
- * Jupiter stores current claims, not an event history, so this is a reading of
- * the present rather than a replay of the past: what each live claim means for
- * you right now, plus announcements and advisor findings. Everything is framed
- * as "what happened / what you can do" because that is what the log is for.
+ * Two sources, deliberately: `activity` is a snapshot of the present — what
+ * each live claim means for you right now — and `history` is the closed
+ * claims behind it, fetched from `/api/history`. Without the second the log
+ * empties itself as claims lapse, because a claim leaving `/api/activity` is
+ * the only trace expiry leaves. Everything is framed as "what happened / what
+ * you can do" because that is what the log is for.
  *
  * `me` is the signed-in member's display name when known, so entries can say
  * "you" instead of naming you in the third person.
@@ -48,6 +53,7 @@ export function buildLog(
   semantic: SemanticOut | null,
   nowMs: number,
   me?: string | null,
+  history: HistoryLockOut[] = [],
 ): LogEntry[] {
   if (!activity) return []
   const locks = activity.locks
@@ -126,6 +132,59 @@ export function buildLog(
     })
   }
 
+  // Claims that have already closed. A row that is still live is skipped —
+  // the loop above already spoke for it, against fresher data than a history
+  // fetch has, and two rows for one claim would read as two events.
+  const live = new Set(locks.map(l => l.lock_id))
+  for (const claim of history) {
+    if (claim.state === 'active' || live.has(claim.lock_id)) continue
+
+    const at = Date.parse(claim.locked_at ?? '') || nowMs
+    const who = isMine(claim) ? 'You' : claim.member
+    const ran = `from ${formatClock(claim.locked_at)} to ${formatClock(claim.released_at)}`
+    const ending = claim.state === 'expired'
+      ? 'it lapsed without being refreshed'
+      : 'it was released'
+    const clashes = pastConflictingHolders(claim, history)
+
+    if (clashes.length > 0) {
+      const shared = intersectRange(claim, clashes[0])
+      const overlap = shared
+        ? `lines ${shared.start}–${shared.end} overlapped`
+        : 'the claims overlapped'
+      entries.push({
+        id: `past-conflict-${claim.lock_id}`,
+        at,
+        atIso: claim.locked_at,
+        severity: 'conflict',
+        past: true,
+        title: `Conflict on ${claim.file_path}`,
+        what:
+          `${who} held ${formatRange(claim.line_start, claim.line_end)} of ${claim.file_path} (${claim.intent}) ${ran}, ` +
+          `while ${clashes.map(c => `${c.member} held ${formatRange(c.line_start, c.line_end)} (${c.intent})`).join(' and ')} — ${overlap}. ` +
+          `Both claims were recorded — Jupiter reports, it never blocks — and ${ending}.`,
+        todo: [],
+      })
+      continue
+    }
+
+    const label = formatPathWithRange(claim.file_path, claim.line_start, claim.line_end)
+    entries.push({
+      id: `closed-${claim.lock_id}`,
+      at,
+      atIso: claim.locked_at,
+      severity: 'closed',
+      past: true,
+      title: claim.state === 'expired'
+        ? `Claim lapsed on ${claim.file_path}`
+        : `Claim released on ${claim.file_path}`,
+      what:
+        `${who} held ${label} (${claim.intent}) ${ran}` +
+        `${claim.note ? ` — ${claim.note}` : ''}. Nobody else was on it.`,
+      todo: [],
+    })
+  }
+
   if (semantic?.status === 'ready') {
     for (const [i, o] of semantic.overlaps.entries()) {
       entries.push({
@@ -160,7 +219,7 @@ export function buildLog(
 
 export function countBySeverity(entries: LogEntry[]): Record<LogSeverity, number> {
   const out: Record<LogSeverity, number> = {
-    conflict: 0, advisory: 0, expiring: 0, expired: 0, ok: 0, info: 0,
+    conflict: 0, advisory: 0, expiring: 0, expired: 0, ok: 0, info: 0, closed: 0,
   }
   for (const e of entries) out[e.severity] += 1
   return out

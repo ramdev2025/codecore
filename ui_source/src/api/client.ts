@@ -25,6 +25,24 @@ export interface LockOut {
   has_snippet: boolean
 }
 
+/**
+ * A claim from `/api/history` — live or long since closed.
+ *
+ * `state` is inferred server-side from how long the claim had gone
+ * unrefreshed when it closed, because the sweep and an explicit unlock both
+ * just stamp `released_at`. Treat it as a label, not a fact of record.
+ */
+export interface HistoryLockOut extends LockOut {
+  released_at: string | null
+  state: 'active' | 'expired' | 'released'
+}
+
+export interface HistoryOut {
+  limit: number
+  lock_ttl_seconds: number
+  claims: HistoryLockOut[]
+}
+
 export interface SnippetOut {
   lock_id: number
   file_path: string
@@ -181,6 +199,15 @@ export const api = {
     request<MemberOut[]>(`/api/orgs/${encodeURIComponent(slug)}/members`),
 
   activity: () => request<ActivityOut>('/api/activity'),
+
+  /**
+   * Past claims, including ones that have already lapsed.
+   *
+   * `activity()` is deliberately a snapshot of the present and drops a claim
+   * the instant it expires; this is how the Log page keeps a record of what
+   * happened after the claim behind it is gone.
+   */
+  history: (limit = 200) => request<HistoryOut>(`/api/history?limit=${limit}`),
 
   announcements: (limit = 20) =>
     request<AnnouncementOut[]>(`/api/announcements?limit=${limit}`),

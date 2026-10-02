@@ -23,8 +23,12 @@ from jupiter_core.config import (
 )
 from jupiter_core.errors import unprocessable
 from jupiter_core.locks_repo import (
+    HISTORY_LIMIT,
+    HISTORY_MAX_LIMIT,
     acquire_lock,
     active_locks_for,
+    claim_history,
+    history_out,
     release_lock,
     snippet_for,
 )
@@ -161,27 +165,55 @@ async def get_activity(
     )
 
 
+def _limit_param(request: Request, default: int, maximum: int) -> int:
+    """A `?limit=` value, or the default.
+
+    Parsed by hand rather than via a typed query param so a bad value is a 422
+    with our {"detail": "..."} shape, and so the value actually reaches the
+    query - jupiter-code's bug #5 was a limit that was silently ignored.
+    """
+    raw = request.query_params.get("limit")
+    if raw is None or raw == "":
+        return default
+    try:
+        limit = int(raw)
+    except ValueError:
+        raise unprocessable("limit must be an integer") from None
+    if limit < 1:
+        raise unprocessable("limit must be at least 1")
+    return min(limit, maximum)
+
+
+@router.get("/history")
+async def get_history(
+    request: Request,
+    principal: Principal = Depends(current_principal),
+    aconn=Depends(db_conn),
+) -> dict:
+    """Claims that have already closed, alongside the live ones.
+
+    `/api/activity` answers "what is claimed right now" and drops a claim the
+    moment it lapses, which is correct for a dashboard and useless for a log.
+    This is the same rows without the `released_at IS NULL` filter, so the
+    record of a conflict outlives the conflict.
+    """
+    limit = _limit_param(request, HISTORY_LIMIT, HISTORY_MAX_LIMIT)
+    ttl = lock_ttl()
+    claims = await claim_history(aconn, principal.org_id, limit)
+    return {
+        "limit": limit,
+        "lock_ttl_seconds": ttl,
+        "claims": _dump_list([history_out(c, ttl) for c in claims]),
+    }
+
+
 @router.get("/announcements")
 async def get_announcements(
     request: Request,
     principal: Principal = Depends(current_principal),
     aconn=Depends(db_conn),
 ) -> dict:
-    # Parsed by hand rather than via a typed query param so a bad value is a
-    # 422 with our {"detail": "..."} shape, and so the value actually reaches
-    # the query — jupiter-code's bug #5 was a limit that was silently ignored.
-    raw = request.query_params.get("limit")
-    if raw is None or raw == "":
-        limit = ANNOUNCEMENT_LIMIT
-    else:
-        try:
-            limit = int(raw)
-        except ValueError:
-            raise unprocessable("limit must be an integer") from None
-        if limit < 1:
-            raise unprocessable("limit must be at least 1")
-        limit = min(limit, ANNOUNCEMENT_MAX_LIMIT)
-
+    limit = _limit_param(request, ANNOUNCEMENT_LIMIT, ANNOUNCEMENT_MAX_LIMIT)
     announcements = await recent_announcements(aconn, principal.org_id, limit)
     return {"limit": limit, "announcements": _dump_list(announcements)}
 

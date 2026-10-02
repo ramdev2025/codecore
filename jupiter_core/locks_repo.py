@@ -41,6 +41,37 @@ ACTIVE_LOCKS_SQL = """
 """
 
 
+# The same columns, plus `released_at`, and without the `released_at IS NULL`
+# filter - so this returns closed claims too. Nothing in Jupiter ever DELETEs a
+# claim (expiry is an UPDATE in sweep.py), which is what makes a history view
+# possible at all: every claim ever taken is still in this table.
+HISTORY_LOCKS_SQL = """
+    SELECT l.id,
+           l.file_path,
+           l.intent,
+           l.session_id,
+           l.locked_at,
+           l.refreshed_at,
+           l.note,
+           s.member_id,
+           s.working_dir,
+           m.display_name,
+           l.line_start,
+           l.line_end,
+           EXISTS (SELECT 1 FROM claim_snippets cs WHERE cs.lock_id = l.id),
+           l.released_at
+      FROM file_locks l
+      JOIN sessions s ON s.id = l.session_id
+      JOIN members  m ON m.id = s.member_id
+     WHERE l.org_id = %s
+     ORDER BY l.locked_at DESC, l.id DESC
+     LIMIT %s
+"""
+
+HISTORY_LIMIT = 200
+HISTORY_MAX_LIMIT = 1000
+
+
 @dataclass(frozen=True)
 class ActiveLock:
     id: int
@@ -56,6 +87,9 @@ class ActiveLock:
     line_start: int | None = None
     line_end: int | None = None
     has_snippet: bool = False
+    # Only ever set by the history query; a live claim has released_at NULL by
+    # definition, so this defaults to None and ACTIVE_LOCKS_SQL never selects it.
+    released_at: datetime | None = None
 
 
 def _to_active_lock(row) -> ActiveLock:
@@ -73,6 +107,7 @@ def _to_active_lock(row) -> ActiveLock:
         line_start=int(row[10]) if len(row) > 10 and row[10] is not None else None,
         line_end=int(row[11]) if len(row) > 11 and row[11] is not None else None,
         has_snippet=bool(row[12]) if len(row) > 12 else False,
+        released_at=row[13] if len(row) > 13 else None,
     )
 
 
@@ -83,6 +118,46 @@ async def active_locks_for(aconn, org_id: int) -> list[ActiveLock]:
         await sweep(aconn, org_id, now, lock_ttl())
         async with aconn.cursor() as cur:
             await cur.execute(ACTIVE_LOCKS_SQL, (org_id,))
+            rows = await cur.fetchall()
+    return [_to_active_lock(row) for row in rows]
+
+
+def claim_state(
+    released_at: datetime | None, refreshed_at: datetime | None, ttl: int
+) -> str:
+    """"active", "expired" or "released".
+
+    The distinction is *inferred*, not stored: both the lazy sweep and an
+    explicit `jupiter_unlock_file` do the same thing to a row - stamp
+    `released_at`. The only signal separating them is how long the claim had
+    gone unrefreshed at the moment it closed. A swept claim is one the sweep
+    found past its TTL, so `released_at - refreshed_at >= ttl`; a deliberate
+    release lands sooner than that.
+
+    One case reads as "released" that arguably is not: a claim whose *session*
+    ended takes the session's exit with it, however recently it was refreshed.
+    That is close enough to deliberate to leave alone - somebody closed Claude
+    Code - and the alternative is storing a reason column for a display detail.
+    """
+    if released_at is None:
+        return "active"
+    if refreshed_at is None:
+        return "released"
+    return "expired" if (released_at - refreshed_at).total_seconds() >= ttl else "released"
+
+
+async def claim_history(aconn, org_id: int, limit: int) -> list[ActiveLock]:
+    """The most recent `limit` claims for an org, live and closed alike.
+
+    Swept first, for the same reason every other read is: without it a claim
+    that lapsed a moment ago would still report itself active, and the log
+    would contradict the dashboard it sits next to.
+    """
+    now = utcnow()
+    async with aconn.transaction():
+        await sweep(aconn, org_id, now, lock_ttl())
+        async with aconn.cursor() as cur:
+            await cur.execute(HISTORY_LOCKS_SQL, (org_id, limit))
             rows = await cur.fetchall()
     return [_to_active_lock(row) for row in rows]
 
@@ -119,6 +194,52 @@ def lock_out(lock: ActiveLock, ttl: int) -> LockOut:
         line_start=lock.line_start,
         line_end=lock.line_end,
         has_snippet=lock.has_snippet,
+    )
+
+
+@dataclass(frozen=True)
+class HistoryLockOut:
+    """A claim as the history endpoint publishes it.
+
+    A superset of `LockOut` rather than an extension of it: the active payload
+    and the SSE frames stay byte-identical, so nothing that already reads them
+    (the MCP renderer above all) sees a new field appear.
+    """
+
+    lock_id: int
+    file_path: str
+    intent: str
+    member: str
+    member_id: int
+    session_id: int
+    working_dir: str | None
+    locked_at: str | None
+    expires_at: str | None
+    note: str | None
+    line_start: int | None
+    line_end: int | None
+    has_snippet: bool
+    released_at: str | None
+    state: str  # "active" | "expired" | "released"
+
+
+def history_out(lock: ActiveLock, ttl: int) -> HistoryLockOut:
+    return HistoryLockOut(
+        lock_id=lock.id,
+        file_path=lock.file_path,
+        intent=lock.intent,
+        member=lock.member,
+        member_id=lock.member_id,
+        session_id=lock.session_id,
+        working_dir=lock.working_dir,
+        locked_at=isoformat(lock.locked_at),
+        expires_at=isoformat(expires_at(lock.refreshed_at, ttl)) if lock.refreshed_at else None,
+        note=lock.note,
+        line_start=lock.line_start,
+        line_end=lock.line_end,
+        has_snippet=lock.has_snippet,
+        released_at=isoformat(lock.released_at),
+        state=claim_state(lock.released_at, lock.refreshed_at, ttl),
     )
 
 

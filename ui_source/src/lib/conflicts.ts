@@ -1,4 +1,4 @@
-import type { LockOut } from '../api/client'
+import type { HistoryLockOut, LockOut } from '../api/client'
 
 /**
  * The conflict rule, mirrored client-side for display only.
@@ -34,6 +34,37 @@ export function conflictingHolders(lock: LockOut, all: LockOut[]): LockOut[] {
 
 export function hasConflict(lock: LockOut, all: LockOut[]): boolean {
   return conflictingHolders(lock, all).length > 0
+}
+
+/**
+ * Did two claims' lifetimes actually overlap?
+ *
+ * `conflictingHolders` can skip this because everything in the activity
+ * payload is live simultaneously by construction. History is not: two people
+ * claiming the same lines an hour apart never collided, and saying they did
+ * would be worse than showing nothing. An unreleased claim runs to now, so
+ * its end is open.
+ */
+export function livesOverlapped(a: HistoryLockOut, b: HistoryLockOut): boolean {
+  const aStart = Date.parse(a.locked_at ?? '')
+  const bStart = Date.parse(b.locked_at ?? '')
+  if (Number.isNaN(aStart) || Number.isNaN(bStart)) return false
+  const aEnd = a.released_at ? Date.parse(a.released_at) : Infinity
+  const bEnd = b.released_at ? Date.parse(b.released_at) : Infinity
+  return aStart <= bEnd && bStart <= aEnd
+}
+
+/** The same rule as `conflictingHolders`, plus the claims having coexisted. */
+export function pastConflictingHolders(
+  lock: HistoryLockOut, all: HistoryLockOut[],
+): HistoryLockOut[] {
+  return all.filter(other =>
+    other.file_path === lock.file_path &&
+    other.member_id !== lock.member_id &&
+    (other.intent === 'editing' || lock.intent === 'editing') &&
+    rangesOverlap(lock.line_start, lock.line_end, other.line_start, other.line_end) &&
+    livesOverlapped(lock, other)
+  )
 }
 
 /** "lines 40–80", "line 40", or "whole file". */
