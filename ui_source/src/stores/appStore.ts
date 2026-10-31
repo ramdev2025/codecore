@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { readStoredKey, writeStoredKey } from '../api/client'
 
-export type PageId = 'overview' | 'files' | 'log' | 'team' | 'activity' | 'settings'
+export type PageId = 'overview' | 'files' | 'log' | 'team' | 'billing' | 'activity' | 'settings'
 
 interface AppState {
   page: PageId

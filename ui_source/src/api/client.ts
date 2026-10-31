@@ -130,6 +130,64 @@ export interface MemberCreated {
   api_key: string
 }
 
+// ---------------------------------------------------------------------------
+// Billing: Moon Points, plans, developer teams
+// ---------------------------------------------------------------------------
+
+/** Whether top-ups are possible on this deployment, and why not if not. */
+export interface PayPalStatus {
+  enabled: boolean
+  client_id: string | null
+  env: string | null
+  reason: string | null
+}
+
+export interface PlanInfo {
+  key: 'free' | 'pro' | 'enterprise'
+  label: string
+  price_points: number
+  max_teams: number
+}
+
+export interface BillingOut {
+  balance: number
+  plan: string
+  plan_label: string
+  price_points: number
+  max_teams: number
+  period_ends_at: string | null
+  teams_count: number
+  plans: PlanInfo[]
+  paypal: PayPalStatus
+}
+
+export interface TopupOut {
+  points_added: number
+  balance: number
+  paypal_order_id: string
+}
+
+export interface OrderOut {
+  paypal_order_id: string
+  amount_usd: number
+}
+
+export interface TeamMemberOut {
+  member_id: number
+  display_name: string
+}
+
+export interface TeamOut {
+  team_id: number
+  name: string
+  created_at: string | null
+  members: TeamMemberOut[]
+}
+
+export interface TeamsOut {
+  teams: TeamOut[]
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, detail: string) {
@@ -241,6 +299,48 @@ export const api = {
     line_end?: number
     code?: string
   }) => request<LockResponse>('/api/locks', { method: 'POST', body: JSON.stringify(body) }),
+
+  billing: () => request<BillingOut>('/api/billing'),
+
+  /**
+   * Ask the server to create a PayPal order for a whole-dollar top-up.
+   * Returns PayPal's order id, which the PayPal JS SDK's createOrder
+   * callback hands back to us — the amount is only ever decided
+   * server-side and re-verified at capture.
+   */
+  createTopup: (amountUsd: number) =>
+    request<OrderOut>('/api/billing/orders', {
+      method: 'POST',
+      body: JSON.stringify({ amount_usd: amountUsd }),
+    }),
+
+  captureTopup: (paypalOrderId: string) =>
+    request<TopupOut>(`/api/billing/orders/${encodeURIComponent(paypalOrderId)}/capture`, {
+      method: 'POST',
+    }),
+
+  redeem: (planKey: string) =>
+    request<BillingOut>('/api/billing/redeem', {
+      method: 'POST',
+      body: JSON.stringify({ plan: planKey }),
+    }),
+
+  teams: () => request<TeamsOut>('/api/teams'),
+
+  createTeam: (name: string) =>
+    request<TeamOut>('/api/teams', { method: 'POST', body: JSON.stringify({ name }) }),
+
+  deleteTeam: (teamId: number) =>
+    request<unknown>(`/api/teams/${teamId}`, { method: 'DELETE' }),
+
+  addTeamMember: (teamId: number, memberId: number) =>
+    request<unknown>(`/api/teams/${teamId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ member_id: memberId }),
+    }),
+
+  removeTeamMember: (teamId: number, memberId: number) =>
+    request<unknown>(`/api/teams/${teamId}/members/${memberId}`, { method: 'DELETE' }),
 }
 
 /** SSE URL for an org's live activity stream. */

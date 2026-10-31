@@ -176,17 +176,61 @@ wrong: a claim whose session ended reports `released` however recently it was re
 The dashboard re-fetches history when the set of live claims changes rather than on a timer,
 since a claim entering or leaving `/api/activity` is exactly when history gains a row.
 
+## Billing: Moon Points
+
+Plans are bought with **Moon Points**, purchased via PayPal at a flat **1 USD = 1 point**
+(whole dollars only). The wallet belongs to the **org** — one balance, one plan, everyone in it.
+
+| Plan | Price per 30-day cycle | Developer teams |
+|---|---|---|
+| Free | 0 | 1 |
+| Pro | 50 points | 6 |
+| Enterprise | 300 points | 100 |
+
+A **developer team** is a sub-grouping of members inside the org (org → teams → members),
+created and assigned from the Team page. The plan caps how many teams the org may have.
+
+How a cycle works:
+
+- **Redeeming** 50 points switches the org to Pro for 30 days — starting `now`, or stacking on
+  the current period's end if one is already live (upgrading mid-cycle keeps the paid days).
+- **Renewal is lazy.** There is no scheduler. Every billing read and write first settles the
+  org inside the same transaction: if the period has ended and the balance covers the next
+  cycle, it is charged and the period extends; if it doesn't, the org drops to Free.
+- **Over-cap teams are grandfathered.** A downgrade never deletes a team — it only stops new
+  ones being created until the org is back on a plan that allows them.
+- **One cycle per settle.** An org left unattended for 90 days is charged for one cycle at
+  most, never a multi-cycle catch-up.
+
+The capture path has one deliberate exception to settle-first: it credits the points and
+*then* settles, so a top-up that lands moments after a period lapsed still funds the renewal
+instead of downgrading the org and demanding a manual re-redeem.
+
+Top-ups go through the real PayPal Orders v2 API. The order amount is decided server-side,
+recorded in `billing_orders`, and re-verified at capture against **our own row** — never
+against what the client claims. Capture is idempotent: a `paypal_order_id` can credit points
+exactly once, and re-capturing returns `points_added: 0` with the current balance.
+
+Leave `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET` unset and the feature degrades cleanly —
+`GET /api/billing` still returns 200 with a `paypal.reason`, and the Billing page shows the
+reason where the top-up buttons would be. `PAYPAL_ENV` defaults to `sandbox`; anything that
+isn't `live` is treated as sandbox, so a typo can't point at real money.
+
 ## API
 
 **Public** — `GET /api/healthz` · `POST /api/orgs` · `POST /api/orgs/{slug}/join`
 
 **Member or admin** — `GET /api/orgs/{slug}/members` · `GET /api/orgs/{slug}/activity` ·
 `GET /api/activity` · `GET /api/history?limit=N` · `GET /api/announcements?limit=N` ·
-`GET /api/orgs/{slug}/stream` *(SSE)* · `GET /api/semantic`
+`GET /api/orgs/{slug}/stream` *(SSE)* · `GET /api/semantic` · `GET /api/billing` ·
+`GET /api/teams`
 
 **Member only** — `POST /api/sessions` · `POST /api/sessions/{id}/heartbeat` ·
 `DELETE /api/sessions/{id}` · `POST /api/locks` · `POST /api/locks/release` ·
-`POST /api/announcements` · `GET /api/locks/{lock_id}/snippet`
+`POST /api/announcements` · `GET /api/locks/{lock_id}/snippet` · `POST /api/billing/orders` ·
+`POST /api/billing/orders/{order_id}/capture` · `POST /api/billing/redeem` · `POST /api/teams` ·
+`DELETE /api/teams/{team_id}` · `POST /api/teams/{team_id}/members` ·
+`DELETE /api/teams/{team_id}/members/{member_id}`
 
 **MCP** — `POST /api/mcp` · `POST /api/mcp/{key}`
 
@@ -207,6 +251,8 @@ python -m jupiter_admin join --slug my-team --display-name alice
 python -m jupiter_admin list-members --slug my-team
 python -m jupiter_admin semantic-status --slug my-team   # actually calls the model
 python -m jupiter_admin whoami --key jpm_...
+python -m jupiter_admin billing-status --slug my-team    # plan, balance, renewal — settles first
+python -m jupiter_admin grant-points --slug my-team --points 50 [--note "demo credit"]
 ```
 
 ## Configuration
@@ -222,6 +268,9 @@ python -m jupiter_admin whoami --key jpm_...
 | `JUPITER_LLM_API_KEY` | no | `MODEL_IQ_API_KEY` | Overrides the gateway used for overlap analysis |
 | `JUPITER_LLM_MODEL` | no | `glm-5-3` | Any model your gateway serves |
 | `JUPITER_LLM_ENABLED` | no | — | Set to `false` to force overlap analysis off without removing keys |
+| `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | no | — | PayPal app credentials for Moon Point top-ups. Unset = feature off with a reason |
+| `PAYPAL_ENV` | no | `sandbox` | `live` for real payments; anything else resolves to sandbox |
+| `PAYPAL_BASE_URL` | no | — | Override for the PayPal API base URL (tests, proxies) |
 
 A Jupiter key is a **256-bit random token**, stored as a SHA-256 digest and compared in constant
 time. Set `JUPITER_KEY_PEPPER` to upgrade the digest to HMAC-SHA-256, so a read-only leak of the
@@ -258,6 +307,14 @@ Jupiter on a public address.
   [Claude Code #29562](https://github.com/anthropics/claude-code/issues/29562) and
   [#50464](https://github.com/anthropics/claude-code/issues/50464), where `--header` is not
   forwarded to an HTTP MCP server. Prefer the header form.
+- **Any member can spend the org's Moon Points.** Top-up, redeem and team management are
+  member-level: an org member who knows the slug can redeem the shared balance into a plan,
+  or top up (spending only their own money). There is no per-member spending authority —
+  points only ever convert to plans for that org.
+- **Renewals settle lazily, not on a timer.** If nobody touches billing state after a period
+  ends, the org shows its old plan until the next billing read or write performs the
+  downgrade. A lapsed org can still create teams for a while — the cap is enforced at
+  creation time against the settled plan.
 
 ## Layout
 
@@ -272,6 +329,9 @@ jupiter_core/     all the logic, framework-free
   auth.py         key minting and verification   locks_repo.py  the conflict rule,
                                                  and the history query beside it
   activity.py     the single batched query   semantic.py  analysis + validation
+  plans.py        plan math: 1:1 pricing, cycles, team caps
+  billing_repo.py wallet, lazy renewal, exactly-once capture
+  teams_repo.py   developer teams + plan cap; paypal.py  Orders v2 client
   render.py       the exact tool output strings
 mcp_app/          the MCP server (official mcp SDK, transport-level bearer auth)
 jupiter_admin/    bootstrap CLI
@@ -287,7 +347,7 @@ implementation of the coordination rules.
 ## Tests
 
 ```bash
-pytest tests/          # 150 tests, fully offline
+pytest tests/          # 206 tests, fully offline
 ```
 
 Covers path normalisation (separators, `.`/`..`, NFC, control characters, the length cap, and that
@@ -309,6 +369,13 @@ follows the configured TTL rather than the default, that a row with no `refreshe
 called expired, and that `HistoryLockOut` and `LockOut` agree on every field they share — plus
 that the two queries select the same columns in the same order, since both feed one positional
 row mapper.
+
+The plans suite pins the pricing table (1 point = 1 USD, free/pro/enterprise team caps), the
+cycle math at its boundaries (a period is over at the instant it ends; one renewal per settle,
+never a catch-up charge after a lapse), redeem stacking and mid-cycle upgrades, and the
+team-cap check at the limit. The PayPal suite drives `parse_capture` against every way a
+capture payload can be wrong — non-COMPLETED, wrong currency, amount mismatch, a fractional
+dollar, and nine malformed shapes — plus the config resolution for sandbox/live/unset.
 
 Integration tests that need a real database are gated behind `JUPITER_TEST_DATABASE_URL` and skip
 when it is unset: the lazy-sweep SQL uses `interval`, `ON CONFLICT … WHERE` and a correlated

@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from agentflow import AsyncWorkflowOrchestrator  # noqa: E402
 
 import advisor  # noqa: E402
-from api import rest_router, stream_router  # noqa: E402
+from api import billing_router, rest_router, stream_router  # noqa: E402
 from jupiter_core.db import close_pool, get_pool  # noqa: E402
 from jupiter_core.errors import JupiterError  # noqa: E402
 from mcp_app.server import MCP_ROUTE, session_manager  # noqa: E402
@@ -87,6 +87,7 @@ async def validation_error_handler(request: Request, error: RequestValidationErr
 
 fastapi_app.include_router(rest_router)
 fastapi_app.include_router(stream_router)
+fastapi_app.include_router(billing_router)
 
 
 def _normalize_content(content):

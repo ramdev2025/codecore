@@ -116,6 +116,79 @@ CREATE TABLE IF NOT EXISTS claim_snippets (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_claim_snippets_lock ON claim_snippets (lock_id);
 CREATE INDEX IF NOT EXISTS ix_claim_snippets_org ON claim_snippets (org_id);
+
+-- ============================================================================
+-- Billing: Moon Points, PayPal orders, and developer teams.
+-- The wallet and plan live on the org - both are org-wide.
+-- ============================================================================
+
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan varchar(16) NOT NULL DEFAULT 'free';
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_period_ends_at timestamptz;
+
+-- ADD CONSTRAINT has no IF NOT EXISTS (the ck_file_locks_lines precedent).
+DO $$ BEGIN
+    ALTER TABLE organizations ADD CONSTRAINT ck_org_plan
+        CHECK (plan IN ('free', 'pro', 'enterprise'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- Append-only: the balance is always derived (SUM(delta)), never stored
+-- separately, so it cannot disagree with the rows. balance_after is a
+-- display convenience written in the same transaction as its delta.
+CREATE TABLE IF NOT EXISTS points_ledger (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    org_id          bigint      NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
+    delta           integer     NOT NULL,
+    balance_after   integer     NOT NULL,
+    kind            varchar(16) NOT NULL,
+    note            text,
+    paypal_order_id varchar(64),
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT ck_ledger_delta CHECK (delta <> 0),
+    CONSTRAINT ck_ledger_kind  CHECK (kind IN ('topup', 'grant', 'redeem', 'renewal'))
+);
+
+CREATE INDEX IF NOT EXISTS ix_ledger_org ON points_ledger (org_id);
+
+-- One ledger row per PayPal order: capture idempotency. A replayed
+-- capture hits the unique index and credits nothing the second time.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ledger_paypal
+    ON points_ledger (paypal_order_id) WHERE paypal_order_id IS NOT NULL;
+
+-- Every PayPal order we create, so capture can verify the amount against
+-- what WE asked PayPal for - never what the client claims it paid.
+CREATE TABLE IF NOT EXISTS billing_orders (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    org_id          bigint       NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
+    paypal_order_id varchar(64)  NOT NULL UNIQUE,
+    amount_usd      integer      NOT NULL,
+    status          varchar(16)  NOT NULL DEFAULT 'created',
+    created_at      timestamptz  NOT NULL DEFAULT now(),
+    captured_at     timestamptz,
+    CONSTRAINT ck_order_status CHECK (status IN ('created', 'captured', 'failed'))
+);
+
+CREATE INDEX IF NOT EXISTS ix_billing_orders_org ON billing_orders (org_id);
+
+-- Developer teams: a sub-grouping of members inside an org, capped by the
+-- org's plan. Over-cap teams after a downgrade are grandfathered - the
+-- rows stay, but no new ones can be created.
+CREATE TABLE IF NOT EXISTS teams (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    org_id     bigint       NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
+    name       varchar(120) NOT NULL,
+    created_at timestamptz  NOT NULL DEFAULT now(),
+    CONSTRAINT uq_team_name_per_org UNIQUE (org_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS ix_teams_org ON teams (org_id);
+
+CREATE TABLE IF NOT EXISTS team_members (
+    team_id   bigint      NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
+    member_id bigint      NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    added_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (team_id, member_id)
+);
 """
 
 _pool: AsyncConnectionPool | None = None

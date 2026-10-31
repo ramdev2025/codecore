@@ -1,7 +1,9 @@
 # Deploying Jupiter
 
-Target: **https://jupiter.workmov.com**, running on Fly.io in Singapore, with
-DNS on Cloudflare.
+Target: **https://app.jupitercode.dev**, running on Fly.io in Singapore, with
+DNS on Cloudflare. (The original deployment was jupiter.workmov.com; the
+certificate for the old name jupiter.mythify.dev is still on the app and can be
+dropped with `fly certs remove jupiter.mythify.dev`.)
 
 ## Why this shape
 
@@ -34,24 +36,31 @@ fly auth signup      # or: fly auth login
 fly apps create jupiter-workmov
 ```
 
-Secrets come from your local `.env` — never commit them. Set all four in one
-command, so the app restarts once rather than four times:
+Secrets come from your local `.env` — never commit them. Set all in one
+command, so the app restarts once rather than several times:
 
 ```powershell
 fly secrets set `
   DATABASE_URL="postgresql://...-pooler.../...?sslmode=require" `
   MODEL_IQ_BASE_URL="https://model-iq.aicore.accenture.com/v1" `
   MODEL_IQ_API_KEY="..." `
-  JUPITER_AGENT_API_KEY="jpm_..."
+  JUPITER_AGENT_API_KEY="jpm_..." `
+  PAYPAL_CLIENT_ID="..." `
+  PAYPAL_CLIENT_SECRET="..." `
+  PAYPAL_ENV=sandbox
 ```
 
-Two notes on configuration:
+Three notes on configuration:
 
 - Use the **pooled** Neon endpoint — the host must contain `-pooler`. The direct
   endpoint will exhaust connections.
 - Do **not** set `JUPITER_KEY_PEPPER` now. It changes how key digests are
   computed, so adding it would invalidate every key you have already minted,
   including `JUPITER_AGENT_API_KEY`.
+- The `PAYPAL_*` secrets enable Moon Point top-ups. Omit them and the Billing
+  page degrades to a reason instead of the PayPal buttons — nothing breaks.
+  `PAYPAL_ENV=sandbox` keeps it on sandbox credentials even if live ones are
+  pasted by mistake.
 
 The database schema already exists. Against a fresh database you would first run
 `python -m jupiter_admin db-push` locally, pointed at it.
@@ -70,27 +79,36 @@ curl https://jupiter-workmov.fly.dev/api/healthz
 # {"status":"ok","version":"...","lock_ttl_seconds":300}
 ```
 
-## 3. Point workmov.com at it
+## 3. Point jupitercode.dev at it
 
-In **Cloudflare → DNS** for `workmov.com`, add:
+In **Cloudflare → DNS** for `jupitercode.dev`, the record for `app` must be
+grey (DNS only), not orange:
 
 | Type | Name | Target | Proxy |
 |---|---|---|---|
-| CNAME | `jupiter` | `jupiter-workmov.fly.dev` | **DNS only (grey)** |
+| A | `app` | `66.241.124.35` | **DNS only (grey)** |
+| AAAA | `app` | `2a09:8280:1::19f:12c2:0` | **DNS only (grey)** |
 
-Grey cloud, not orange — at least to start. Proxying breaks Fly's HTTP-01 ACME
-challenge, so the certificate never issues, and Cloudflare's proxy can buffer
-Server-Sent Events, which is exactly what the dashboard's live activity feed
-depends on. Grey cloud avoids both problems and Fly still serves valid TLS.
+(or a single grey CNAME `app → jupiter-workmov.fly.dev`, which follows the app
+if its IPs ever change)
+
+Grey cloud, not orange. Proxying breaks Fly's HTTP-01 ACME challenge, so the
+certificate never issues, and Cloudflare's proxy can buffer Server-Sent Events,
+which is exactly what the dashboard's live activity feed depends on. **The
+record for `app` is currently orange** (it resolves to Cloudflare IPs
+172.67.160.137/104.21.14.202 instead of Fly's 66.241.124.35) — switch it to
+grey in Cloudflare → DNS → edit the `app` record → Proxy status off.
 
 Then issue the certificate:
 
 ```powershell
-fly certs add jupiter.workmov.com
-fly certs show jupiter.workmov.com     # wait for "Ready"
+fly certs add app.jupitercode.dev
+fly certs check app.jupitercode.dev    # wait for "Ready"
 ```
 
-Usually under a minute. Then https://jupiter.workmov.com is live.
+The certificate is already added on the app; it shows **Not verified** until
+the DNS record is grey and pointed at Fly. Usually under a minute after that.
+Then https://app.jupitercode.dev is live.
 
 ### Turning the proxy on later (optional)
 
@@ -100,13 +118,13 @@ Full (strict)**. Not Flexible — Flexible causes a redirect loop. Then reload t
 dashboard and confirm the activity feed still streams; if events arrive in bursts
 instead of live, Cloudflare is buffering the SSE and you should go back to grey.
 
-One caution specific to this zone: `workmov.com` already serves a proxied site at
-its apex, and **Cloudflare's SSL/TLS mode is zone-wide, not per-record**. Changing
-it to Full (strict) for Jupiter also changes it for that existing site, which will
-break it if its origin does not present a valid certificate. Check what the apex
-origin is before touching the mode. Staying on grey cloud avoids the question
-entirely — unproxied records bypass Cloudflare, so the zone mode never applies to
-them.
+One caution specific to this zone: **Cloudflare's SSL/TLS mode is zone-wide, not
+per-record**. Changing it to Full (strict) for `app` also changes it for every
+other record in `jupitercode.dev`. If another record in the zone fronts a
+proxied origin that does not present a valid certificate, Full (strict) will
+break it. Check what else the zone serves before touching the mode. Staying on
+grey cloud avoids the question entirely — unproxied records bypass Cloudflare,
+so the zone mode never applies to them.
 
 ## 4. Deploy on push (optional)
 
@@ -133,7 +151,7 @@ From the dashboard's setup wizard, or directly:
 
 ```bash
 claude mcp add --transport http jupiter --scope user \
-  https://jupiter.workmov.com/api/mcp \
+  https://app.jupitercode.dev/api/mcp \
   --header "Authorization: Bearer jpm_..."
 ```
 

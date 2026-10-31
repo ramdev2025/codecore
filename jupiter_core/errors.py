@@ -37,3 +37,7 @@ def conflict(detail: str) -> JupiterError:
 
 def unprocessable(detail: str) -> JupiterError:
     return JupiterError(422, detail)
+
+
+def payment_required(detail: str) -> JupiterError:
+    return JupiterError(402, detail)

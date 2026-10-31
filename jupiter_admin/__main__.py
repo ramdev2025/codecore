@@ -20,10 +20,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from jupiter_core.auth import parse_key, verify_key, InvalidKey
+from jupiter_core.billing_repo import grant_points_sync
 from jupiter_core.config import key_pepper
 from jupiter_core.db import apply_schema, sync_connection
 from jupiter_core.errors import JupiterError
 from jupiter_core.orgs_repo import create_org, get_org_by_slug, join_org, list_members
+from jupiter_core.plans import plan_for
 
 from .render_cli import render_member_joined, render_org_created
 
@@ -132,6 +134,65 @@ def cmd_semantic_status(args: argparse.Namespace) -> None:
     asyncio.run(run())
 
 
+def cmd_grant_points(args: argparse.Namespace) -> None:
+    try:
+        points = int(args.points)
+    except ValueError:
+        _fail("points must be an integer")
+        return
+
+    conn = sync_connection()
+    try:
+        try:
+            org = get_org_by_slug(conn, args.slug)
+            balance = grant_points_sync(conn, org.id, points, args.note)
+        except JupiterError as error:
+            _fail(error.message)
+            return
+    finally:
+        conn.close()
+    print(f"Granted {points:+d} Moon Points to '{args.slug}'. New balance: {balance}.")
+
+
+def cmd_billing_status(args: argparse.Namespace) -> None:
+    async def run() -> None:
+        from jupiter_core.billing_repo import billing_overview
+
+        conn = sync_connection()
+        try:
+            try:
+                org = get_org_by_slug(conn, args.slug)
+            except JupiterError as error:
+                _fail(error.message)
+                return
+        finally:
+            conn.close()
+
+        from jupiter_core.db import get_pool
+
+        pool = await get_pool()
+        try:
+            async with pool.connection() as aconn:
+                billing = await billing_overview(aconn, org.id)
+        finally:
+            await pool.close()
+
+        print(f"org:         {args.slug}")
+        print(f"plan:        {billing.plan_label}")
+        print(f"balance:     {billing.balance} Moon Points")
+        print(f"teams:       {billing.teams_count} of {billing.max_teams} allowed")
+        if billing.period_ends_at:
+            print(f"cycle ends:  {billing.period_ends_at}")
+        else:
+            print("cycle ends:  -")
+        if billing.paypal.reason:
+            print(f"paypal:      disabled ({billing.paypal.reason})")
+        else:
+            print(f"paypal:      enabled ({billing.paypal.env})")
+
+    asyncio.run(run())
+
+
 def cmd_whoami(args: argparse.Namespace) -> None:
     try:
         parsed = parse_key(args.key)
@@ -194,6 +255,16 @@ def main() -> None:
     p = sub.add_parser("semantic-status", help="Run the semantic-overlap analysis for real.")
     p.add_argument("--slug", required=True)
     p.set_defaults(func=cmd_semantic_status)
+
+    p = sub.add_parser("grant-points", help="Manually credit or debit Moon Points.")
+    p.add_argument("--slug", required=True)
+    p.add_argument("--points", required=True, help="Points to add (or subtract, with -N).")
+    p.add_argument("--note", default=None)
+    p.set_defaults(func=cmd_grant_points)
+
+    p = sub.add_parser("billing-status", help="Show plan, balance, cycle end, and team count.")
+    p.add_argument("--slug", required=True)
+    p.set_defaults(func=cmd_billing_status)
 
     p = sub.add_parser("whoami", help="Resolve and print the Principal for an API key.")
     p.add_argument("--key", required=True)

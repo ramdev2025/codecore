@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, FileCode, LayoutDashboard, Orbit, Radio, RefreshCw, ScrollText, Settings, Users, WifiOff,
+  Activity, FileCode, LayoutDashboard, Orbit, Radio, RefreshCw, ScrollText, Settings, Users, Wallet, WifiOff,
 } from 'lucide-react'
 import type { LockOut } from './api/client'
 import { ConflictModal } from './components/ConflictModal'
@@ -11,6 +11,7 @@ import { useServerClock } from './hooks/useServerClock'
 import { useTheme } from './hooks/useTheme'
 import { hasConflict } from './lib/conflicts'
 import { ActivityPage } from './pages/ActivityPage'
+import { BillingPage } from './pages/BillingPage'
 import { FilesPage } from './pages/FilesPage'
 import { LogPage } from './pages/LogPage'
 import { OverviewPage } from './pages/OverviewPage'
@@ -24,6 +25,7 @@ const NAV = [
   { id: 'files',    label: 'Files',    icon: <FileCode className="w-4 h-4" /> },
   { id: 'log',      label: 'Log',      icon: <ScrollText className="w-4 h-4" /> },
   { id: 'team',     label: 'Team',     icon: <Users className="w-4 h-4" /> },
+  { id: 'billing',  label: 'Billing',  icon: <Wallet className="w-4 h-4" /> },
   { id: 'activity', label: 'Activity', icon: <Activity className="w-4 h-4" /> },
   { id: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> },
 ]
@@ -33,6 +35,7 @@ const TITLES: Record<PageId, string> = {
   files: 'Files',
   log: 'Log',
   team: 'Team',
+  billing: 'Billing',
   activity: 'Activity',
   settings: 'Settings',
 }
@@ -100,7 +103,8 @@ export default function App() {
         {page === 'log' && (
           <LogPage activity={activity} semantic={semantic} nowMs={nowMs} me={me} onInspect={setInspecting} />
         )}
-        {page === 'team' && <TeamPage activity={activity} nowMs={nowMs} />}
+        {page === 'team' && <TeamPage activity={activity} nowMs={nowMs} active={page === 'team'} />}
+        {page === 'billing' && <BillingPage active={page === 'billing'} />}
         {page === 'activity' && <ActivityPage activity={activity} nowMs={nowMs} onPosted={() => void refresh()} />}
         {page === 'settings' && <SettingsPage activity={activity} semantic={semantic} />}
       </DashShell>
